@@ -3,8 +3,18 @@ Homebridge module for Philips TV (with JointSpace enabled) with Power on/off, So
 
 # Description
 
-This plugin is a fork of [homebridge-philipstv-x](https://www.npmjs.com/package/homebridge-philipstv-x) with additional support for Sound control, Ambilight brightness control and input selection control.
-It has been modified to work on a 43PUS6753 TV (2018 model without Android) and may not work on older one. Code may need ajustement for Ambilight to work on other 2018 models
+This plugin is a fork of [gw-wiscon](https://github.com/gw-wiscon)'s
+[homebridge-philipstv-x](https://www.npmjs.com/package/homebridge-philipstv-x)
+with additional support for Sound control, Ambilight brightness control and
+input selection control by [jebabin](https://github.com/jebabin).
+It has been modified to work on a 43PUS6753 TV (2018 model without Android)
+and may not work on older one. Code may need ajustement for Ambilight to work
+on other 2018 models.
+
+This was further modified by [Arkku](https://github.com/arkku) to use the
+HomeKit Television service, which allows remote control from the Control Center
+widget (including volume control by pressing the physical volume up/down
+buttons).
 
 # Installation
 
@@ -15,6 +25,7 @@ It has been modified to work on a 43PUS6753 TV (2018 model without Android) and 
 # Configuration
  
 Example accessory config (needs to be added to the homebridge config.json):
+
   ```
  "accessories": [
  	{
@@ -25,6 +36,9 @@ Example accessory config (needs to be added to the homebridge config.json):
 		"model_year": 2018,
 		"has_ssl": false,
 		"has_ambilight": true,
+		"hide_input_selector": false,
+		"info_button": "Source",
+		"playpause_button": "Options"
  	}
  ]
   ```
@@ -45,6 +59,13 @@ Added test option for WakeOnWLAN:
 	}
 ]
  ```
+
+The Control Center widget info button is mapped to the options menu by default,
+but may be configured to any other remote button (e.g., `Home` or `Source`)
+with the option `"info_button": "Options"`. Likewise the play/pause button may
+be remapped, with `"playpause_button": "PlayPause"`. The somewhat flaky input
+source selector (which simply sends a sequence of buttons, hoping to change the
+input) may be disabled with `"hide_input_selector": true`.
 
 # Credentials for 2016 (and newer?) models with Android TV
 
