@@ -110,8 +110,8 @@ function HttpStatusAccessory(log, config) {
 
 		statusemitter.on("statuspoll_power", function(data) {
 			that.state_power = data;
-			if (that.switchService) {
-				that.switchService.getCharacteristic(Characteristic.On).setValue(that.state_power, null, "statuspoll");
+			if (that.tvService) {
+				that.tvService.getCharacteristic(Characteristic.Active).setValue(that.state_power, null, "statuspoll");
 			}
 		});
 
@@ -325,8 +325,8 @@ HttpStatusAccessory.prototype = {
 						if (error) {
 							that.state_power = false;
 							that.log("setPowerStateLoop - ERROR: %s", error);
-							if (that.switchService) {
-								that.switchService.getCharacteristic(Characteristic.On).setValue(that.state_power, null, "statuspoll");
+							if (that.tvService) {
+								that.tvService.getCharacteristic(Characteristic.Active).setValue(that.state_power, null, "statuspoll");
 							}
 						}
 					});
@@ -341,8 +341,8 @@ HttpStatusAccessory.prototype = {
 					that.state_power = false;
 					that.log("setPowerStateLoop - ERROR: %s", error);
 				}
-				if (that.switchService) {
-					that.switchService.getCharacteristic(Characteristic.On).setValue(that.state_power, null, "statuspoll");
+				if (that.tvService) {
+					that.tvService.getCharacteristic(Characteristic.Active).setValue(that.state_power, null, "statuspoll");
 				}
 				if (that.ambilightService) {
 					that.state_ambilight = false;
