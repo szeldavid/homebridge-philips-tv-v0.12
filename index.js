@@ -54,8 +54,8 @@ function HttpStatusAccessory(log, config) {
 	this.state_power = true;
 	this.state_ambilight = false;
 	this.state_ambilightLevel = 0;
-	this.state_volume = false;
-	this.state_volumeLevel = 0;
+	this.state_muted = false;
+	this.state_volume = 0;
 
 	// Define URL & JSON Payload for Actions
 
@@ -115,8 +115,25 @@ function HttpStatusAccessory(log, config) {
 			}
 		});
 
+		var statusemitter_muted = pollingtoevent(function(done) {
+			that.getMutedState(function(error, response) {
+				done(error, response, that.set_attempt);
+			}, "statuspoll");
+		}, {
+			longpolling: true,
+			interval: that.interval * 1000,
+			longpollEventName: "statuspoll_muted"
+		});
+
+		statusemitter.on("statuspoll_muted", function(data) {
+			that.state_muted = data;
+			if (that.tvSpeakerService) {
+				that.tvSpeakerService.getCharacteristic(Characteristic.Mute).setValue(that.state_muted, null, "statuspoll");
+			}
+		});
+
 		var statusemitter_volume = pollingtoevent(function(done) {
-			that.getVolumeState(function(error, response) {
+			that.getVolumeLevel(function(error, response) {
 				done(error, response, that.set_attempt);
 			}, "statuspoll");
 		}, {
@@ -127,25 +144,8 @@ function HttpStatusAccessory(log, config) {
 
 		statusemitter.on("statuspoll_volume", function(data) {
 			that.state_volume = data;
-			if (that.VolumeService) {
-				that.VolumeService.getCharacteristic(Characteristic.On).setValue(that.state_volume, null, "statuspoll");
-			}
-		});
-
-		var statusemitter_volume_level = pollingtoevent(function(done) {
-			that.getVolumeLevel(function(error, response) {
-				done(error, response, that.set_attempt);
-			}, "statuspoll");
-		}, {
-			longpolling: true,
-			interval: that.interval * 1000,
-			longpollEventName: "statuspoll_volumeLevel"
-		});
-
-		statusemitter.on("statuspoll_volumeLevel", function(data) {
-			that.state_volumeLevel = data;
-			if (that.VolumeService) {
-				that.VolumeService.getCharacteristic(Characteristic.Brightness).setValue(that.state_volumeLevel, null, "statuspoll");
+			if (that.tvSpeakerService) {
+				that.tvSpeakerService.getCharacteristic(Characteristic.Volume).setValue(that.state_volume, null, "statuspoll");
 			}
 		});
 
@@ -348,9 +348,9 @@ HttpStatusAccessory.prototype = {
 					that.state_ambilight = false;
 					that.ambilightService.getCharacteristic(Characteristic.On).setValue(that.state_ambilight, null, "statuspoll");
 				}
-				 if (that.volumeService) {
-					that.state_volume = false;
-					that.volumeService.getCharacteristic(Characteristic.On).setValue(that.state_volume, null, "statuspoll");
+				 if (that.tvSpeakerService) {
+					that.state_muted = false;
+					that.tvSpeakerService.getCharacteristic(Characteristic.Mute).setValue(that.state_muted, null, "statuspoll");
 				}
 				callback(error, that.state_power);
 			}.bind(this));
@@ -600,61 +600,61 @@ HttpStatusAccessory.prototype = {
 
 	// Volume
 
-	setVolumeStateLoop: function(nCount, url, body, volumeState, callback) {
+	setMutedStateLoop: function(nCount, url, body, mutedState, callback) {
 		var that = this;
 
 		that.httpRequest(url, body, "POST", this.need_authentication, function(error, response, responseBody) {
 			if (error) {
 				if (nCount > 0) {
-					that.log('setVolumeStateLoop - attempt, attempt id: ', nCount - 1);
-					that.setVolumeStateLoop(nCount - 1, url, body, volumeState, function(err, state) {
+					that.log('setMutedStateLoop - attempt, attempt id: ', nCount - 1);
+					that.setMutedStateLoop(nCount - 1, url, body, mutedState, function(err, state) {
 						callback(err, state);
 					});
 				} else {
-					that.log('setVolumeStateLoop - failed: %s', error.message);
-					volumeState = false;
-					callback(new Error("HTTP attempt failed"), volumeState);
+					that.log('setMutedStateLoop - failed: %s', error.message);
+					mutedState = false;
+					callback(new Error("HTTP attempt failed"), mutedState);
 				}
 			} else {
-				that.log('setVolumeStateLoop - succeeded - current state: %s', volumeState);
-				callback(null, volumeState);
+				that.log('setMutedStateLoop - succeeded - current state: %s', mutedState);
+				callback(null, mutedState);
 			}
 		});
 	},
 
-	setVolumeState: function(volumeState, callback, context) {
+	setMutedState: function(mutedState, callback, context) {
 		var url = this.audio_url;
 		var body;
 		var that = this;
 
-		this.log.debug("Entering %s with context: %s and target value: %s", arguments.callee.name, context, volumeState);
+		this.log.debug("Entering %s with context: %s and target value: %s", arguments.callee.name, context, mutedState);
 
 		//if context is statuspoll, then we need to ensure that we do not set the actual value
 		if (context && context == "statuspoll") {
-			callback(null, volumeState);
+			callback(null, mutedState);
 			return;
 		}
 
 		this.set_attempt = this.set_attempt + 1;
 
-		if (volumeState) {
-			body = this.audio_unmute_body;
-			this.log("setVolumeState - setting state to on");
-		} else {
+		if (mutedState) {
 			body = this.audio_mute_body;
-			this.log("setVolumeState - setting state to off");
+			this.log("setMutedState - setting state to on");
+		} else {
+			body = this.audio_unmute_body;
+			this.log("setMutedState - setting state to off");
 		}
 
-		that.setVolumeStateLoop(0, url, body, volumeState, function(error, state) {
-			that.state_volume = volumeState;
+		that.setMutedStateLoop(0, url, body, mutedState, function(error, state) {
+			that.state_muted = mutedState;
 			if (error) {
-				that.state_volume = false;
-				that.log("setVolumeState - ERROR: %s", error);
-				if (that.volumeService) {
-					that.volumeService.getCharacteristic(Characteristic.On).setValue(that.state_volume, null, "statuspoll");
+				that.state_muted = false;
+				that.log("setMutedState - ERROR: %s", error);
+				if (that.tvSpeakerService) {
+					that.tvSpeakerService.getCharacteristic(Characteristic.Mute).setValue(that.state_muted, null, "statuspoll");
 				}
 			}
-			callback(error, that.state_volume);
+			callback(error, that.state_muted);
 
 		}.bind(this));
 	},
@@ -699,27 +699,27 @@ HttpStatusAccessory.prototype = {
 
 		// volumeLevel will be in %, let's convert to reasonable values accepted by TV
 		that.setVolumeLevelLoop(0, url, body, volumeLevel, function(error, state) {
-			that.state_volumeLevel = volumeLevel;
+			that.state_volume = volumeLevel;
 			if (error) {
-				that.state_volumeLevel = false;
-				that.log("setVolumeState - ERROR: %s", error);
-				if (that.volumeService) {
-					that.volumeService.getCharacteristic(Characteristic.On).setValue(that.state_volumeLevel, null, "statuspoll");
+				that.state_volume = false;
+				that.log("setMutedState - ERROR: %s", error);
+				if (that.tvSpeakerService) {
+					that.tvSpeakerService.getCharacteristic(Characteristic.Mute).setValue(that.state_volume, null, "statuspoll");
 				}
 			}
-			callback(error, that.state_volumeLevel);
+			callback(error, that.state_volume);
 		}.bind(this));
 	},
 
-	getVolumeState: function(callback, context) {
+	getMutedState: function(callback, context) {
 		var that = this;
 		var url = this.audio_url;
 
-		this.log.debug("Entering %s with context: %s and current state: %s", arguments.callee.name, context, this.state_volume);
+		this.log.debug("Entering %s with context: %s and current state: %s", arguments.callee.name, context, this.state_muted);
 
 		//if context is statuspoll, then we need to request the actual value
 		if ((!context || context != "statuspoll") && this.switchHandling == "poll") {
-			callback(null, this.state_volume);
+			callback(null, this.state_muted);
 			return;
 		}
 		if (!this.state_power) {
@@ -728,8 +728,8 @@ HttpStatusAccessory.prototype = {
 		}
 		
 		this.httpRequest(url, "", "GET", this.need_authentication, function(error, response, responseBody) {
-			var tResp = that.state_volume;
-			var fctname = "getVolumeState";
+			var tResp = that.state_muted;
+			var fctname = "getMutedState";
 			if (error) {
 				that.log('%s - ERROR: %s', fctname, error.message);
 			} else {
@@ -738,7 +738,7 @@ HttpStatusAccessory.prototype = {
 					try {
 						responseBodyParsed = JSON.parse(responseBody);
 						if (responseBodyParsed) {
-							tResp = (responseBodyParsed.muted == "true") ? 0 : 1;
+							tResp = (responseBodyParsed.muted == "true") ? 1 : 0;
 							that.log.debug('%s - got answer %s', fctname, tResp);
 						} else {
 							that.log("%s - Could not parse message: '%s', not updating state", fctname, responseBody);
@@ -747,9 +747,9 @@ HttpStatusAccessory.prototype = {
 						that.log("%s - Got non JSON answer - not updating state: '%s'", fctname, responseBody);
 					}
 				}
-				if (that.state_volume != tResp) {
+				if (that.state_muted != tResp) {
 					that.log('%s - state changed to: %s', fctname, tResp);
-					that.state_volume = tResp;
+					that.state_muted = tResp;
 				}
 			}
 			callback(null, tResp);
@@ -760,10 +760,10 @@ HttpStatusAccessory.prototype = {
 		var that = this;
 		var url = this.audio_url;
 
-		this.log.debug("Entering %s with context: %s and current value: %s", arguments.callee.name, context, this.state_volumeLevel);
+		this.log.debug("Entering %s with context: %s and current value: %s", arguments.callee.name, context, this.state_volume);
 		//if context is statuspoll, then we need to request the actual value
 		if ((!context || context != "statuspoll") && this.switchHandling == "poll") {
-			callback(null, this.state_volumeLevel);
+			callback(null, this.state_volume);
 			return;
 		}
 		if (!this.state_power) {
@@ -772,7 +772,7 @@ HttpStatusAccessory.prototype = {
 		}
 
 		this.httpRequest(url, "", "GET", this.need_authentication, function(error, response, responseBody) {
-			var tResp = that.state_volumeLevel;
+			var tResp = that.state_volume;
 			var fctname = "getVolumeLevel";
 			if (error) {
 				that.log('%s - ERROR: %s', fctname, error.message);
@@ -791,12 +791,12 @@ HttpStatusAccessory.prototype = {
 						that.log("%s - Got non JSON answer - not updating level: '%s'", fctname, responseBody);
 					}
 				}
-				if (that.state_volumeLevel != tResp) {
+				if (that.state_volume != tResp) {
 					that.log('%s - Level changed to: %s', fctname, tResp);
-					that.state_volumeLevel = tResp;
+					that.state_volume = tResp;
 				}
 			}
-			callback(null, that.state_volumeLevel);
+			callback(null, that.state_volume);
 		}.bind(this));
 	},
 
@@ -1055,8 +1055,8 @@ HttpStatusAccessory.prototype = {
 			.setCharacteristic(Characteristic.VolumeControlType, Characteristic.VolumeControlType.ABSOLUTE);
 		this.speakerService
 			.getCharacteristic(Characteristic.Mute)
-			.on('get', this.getVolumeState.bind(this))
-			.on('set', this.setVolumeState.bind(this));
+			.on('get', this.getMutedState.bind(this))
+			.on('set', this.setMutedState.bind(this));
 		this.speakerService
 			.getCharacteristic(Characteristic.VolumeSelector)
 			.on('set', this.pressVolumeButton.bind(this));
