@@ -1,6 +1,6 @@
 {
   "name": "homebridge-philipstv-enhanced",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Homebridge module for Philips TV",
   "main": "index.js",
   "scripts": {

@@ -10,8 +10,9 @@ module.exports = function(homebridge) {
 	homebridge.registerAccessory("homebridge-philipstv-enhanced", "PhilipsTV", HttpStatusAccessory);
 }
 
-function HttpStatusAccessory(log, config) {
+function HttpStatusAccessory(log, config, api) {
 	this.log = log;
+	this.api = api;
 	var that = this;
 
 	// CONFIG
@@ -20,14 +21,19 @@ function HttpStatusAccessory(log, config) {
 	this.poll_status_interval = config["poll_status_interval"] || "0";
 	this.model_year = config["model_year"] || "2018";
 	this.wol_url = config["wol_url"] || "";
+	this.wol_urls = config["wol_urls"] || [];
+	this.has_chromecast = config["has_chromecast"] || false;
+	if (this.wol_url != "") {
+		this.wol_urls.push(this.wol_url);
+	}
 	this.model_year_nr = parseInt(this.model_year);
 	this.set_attempt = 0;
 	this.has_ambilight = config["has_ambilight"] || false;
 	this.has_ssl = config["has_ssl"] || false;
 	this.has_input_selector = !(config["hide_input_selector"] || false);
-    this.info_button = config["info_button"] || "Source";
-    this.playpause_button = config["playpause_button"] || "Options";
-	this.serial_number = config["serial_number"] || config["wol_url"] || "123456789";
+	this.info_button = config["info_button"] || "Source";
+	this.playpause_button = config["playpause_button"] || "Options";
+	this.serial_number = config["serial_number"] || this.wol_urls[0] || "123456789";
 	this.enabled_services = [];
 
 	// CREDENTIALS FOR API
@@ -88,6 +94,8 @@ function HttpStatusAccessory(log, config) {
 	this.ambilight_config_url = this.protocol + "://" + this.ip_address + ":" + this.portno + "/" + this.api_version + "/menuitems/settings/update";
 	this.ambilight_power_on_body = JSON.stringify({"value":{"Nodeid":100,"Controllable":true,"Available":true,"data":{"activenode_id":120}}}); // Follow Video 
 	this.ambilight_power_off_body = JSON.stringify({"value":{"Nodeid":100,"Controllable":true,"Available":true,"data":{"activenode_id":110}}}); // Off
+
+	this.chromecast_url = this.has_chromecast ? ("http://" + this.ip_address + ":8080/apps/ChromeCast") : null;
 
 	// POLLING ENABLED?
 	this.interval = parseInt(this.poll_status_interval);
@@ -243,27 +251,28 @@ HttpStatusAccessory.prototype = {
 	},
 
 	wolRequest: function(url, callback) {
-		this.log('calling WOL with URL %s', url);
+		this.log.debug('calling WOL with URL %s', url);
 		if (!url) {
-			callback(null, "EMPTY");
+			callback(url, null, "EMPTY");
 			return;
 		}
-		if (url.substring(0, 3).toUpperCase() == "WOL") {
+		if (url.substring(0, 3).toLowerCase() == "wol") {
 			//Wake on lan request
-			var macAddress = url.replace(/^WOL[:]?[\/]?[\/]?/ig, "");
+			var macAddress = url.replace(/^wol[:]?[\/]?[\/]?/ig, "");
 			this.log("Excuting WakeOnLan request to " + macAddress);
 			wol.wake(macAddress, function(error) {
 				if (error) {
-					callback(error);
+					this.log("WakeOnLan failed: %s", error);
+					callback(url, error);
 				} else {
-					callback(null, "OK");
+					callback(url, null, "OK");
 				}
 			});
 		} else {
 			if (url.length > 3) {
-				callback(new Error("Unsupported protocol: ", "ERROR"));
+				callback(url, new Error("Unsupported protocol: ", "ERROR"));
 			} else {
-				callback(null, "EMPTY");
+				callback(url, null, "EMPTY");
 			}
 		}
 	},
@@ -275,12 +284,14 @@ HttpStatusAccessory.prototype = {
 		that.httpRequest(url, body, "POST", this.need_authentication, function(error, response, responseBody) {
 			if (error) {
 				if (nCount > 0) {
-					that.log('setPowerStateLoop - powerstate attempt, attempt id: ', nCount - 1);
-					that.setPowerStateLoop(nCount - 1, url, body, powerState, function(err, state_power) {
-						callback(err, state_power);
-					});
+					that.log.debug('setPowerStateLoop - powerstate attempt %s: %s', nCount - 1, url);
+					setTimeout(function() {
+						that.setPowerStateLoop(nCount - 1, url, body, powerState, function(err, state_power) {
+							callback(err, state_power);
+						});
+					}, 300);
 				} else {
-					that.log('setPowerStateLoop - failed: %s', error.message);
+					that.log('setPowerStateLoop failed: %s %s', url, error.message);
 					powerState = false;
 					callback(new Error("HTTP attempt failed"), powerState);
 				}
@@ -306,30 +317,45 @@ HttpStatusAccessory.prototype = {
 		this.set_attempt = this.set_attempt + 1;
 
 		if (powerState) {
-			if (this.model_year_nr <= 2013) {
-				this.log("Power On is not possible for model_year before 2014.");
-				callback(new Error("Power On is not possible for model_year before 2014."));
-			}
 			body = this.power_on_body;
-			this.log("setPowerState - Will power on");
-			// If Mac Addr for WOL is set
-			if (this.wol_url) {
-				that.log('setPowerState - Sending WOL');
-				this.wolRequest(this.wol_url, function(error, response) {
-					that.log('setPowerState - WOL callback response: %s', response);
-					that.log('setPowerState - powerstate attempt, attempt id: ', 8);
-					//execute the callback immediately, to give control back to homekit
-					callback(error, that.state_power);
-					that.setPowerStateLoop(8, url, body, powerState, function(error, state_power) {
-						that.state_power = state_power;
-						if (error) {
-							that.state_power = false;
-							that.log("setPowerStateLoop - ERROR: %s", error);
-							if (that.tvService) {
-								that.tvService.getCharacteristic(Characteristic.Active).setValue(that.state_power, null, "statuspoll");
+			this.log.debug("setPowerState - Will power on");
+			var called_back = false;
+			var send_chromecast = this.has_chromecast;
+			for (var i = 0; i < this.wol_urls.length; ++i)  {
+				var wol_url = this.wol_urls[i]
+				that.log('setPowerState - Sending WOL ' + wol_url);
+				this.wolRequest(wol_url, function(wol_id, error, response) {
+					that.log('setPowerState - WOL callback %s response: %s', wol_id, response);
+					var send_powerstate = function() {
+						that.setPowerStateLoop(8, url, body, powerState, function(error, state_power) {
+							that.state_power = state_power;
+							if (!called_back) {
+								called_back = true;
+								callback(error, that.state_power);
 							}
-						}
-					});
+							if (error) {
+								that.state_power = false;
+								that.log("setPowerStateLoop - ERROR: %s", error);
+								if (that.tvService) {
+									that.tvService.getCharacteristic(Characteristic.Active).setValue(that.state_power, null, "statuspoll");
+								}
+							}
+						});
+					};
+					if (send_chromecast) {
+						sent_chromecast = false;
+						that.httpRequest(this.chromecast_url, "{}\r\n", "POST", false, function(error, response, responseBody) {
+							if (!that.state_power) {
+								send_powerstate();
+							}
+						});
+					} else {
+						setTimeout(function() {
+							if (!that.state_power) {
+								send_powerstate();
+							}
+						}, 500);
+					}
 				}.bind(this));
 			} 
 		} else {
@@ -347,10 +373,6 @@ HttpStatusAccessory.prototype = {
 				if (that.ambilightService) {
 					that.state_ambilight = false;
 					that.ambilightService.getCharacteristic(Characteristic.On).setValue(that.state_ambilight, null, "statuspoll");
-				}
-				 if (that.tvSpeakerService) {
-					that.state_muted = false;
-					that.tvSpeakerService.getCharacteristic(Characteristic.Mute).setValue(that.state_muted, null, "statuspoll");
 				}
 				callback(error, that.state_power);
 			}.bind(this));
@@ -373,7 +395,11 @@ HttpStatusAccessory.prototype = {
 			var tResp = that.state_power;
 			var fctname = "getPowerState";
 			if (error) {
-				that.log('%s - ERROR: %s', fctname, error.message);
+				if (error.message == "ETIMEDOUT") {
+					that.log.debug('%s - ERROR: %s', fctname, error.message);
+				} else {
+					that.log('%s - ERROR: %s', fctname, error.message);
+				}
 				that.state_power = false;
 			} else {
 				if (responseBody) {
@@ -856,7 +882,7 @@ HttpStatusAccessory.prototype = {
 			this.httpRequest(url, body, "POST", this.need_authentication, function(error, response, responseBody) {
 				if (error) {
 					this.log('pressRemoteButton - error: ', error.message);
-                }
+				}
 			}.bind(this));
 		}
 		callback(null, null);

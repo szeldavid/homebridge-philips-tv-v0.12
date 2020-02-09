@@ -34,11 +34,13 @@ Example accessory config (needs to be added to the homebridge config.json):
  		"ip_address": "10.0.1.23",
  		"poll_status_interval": "60",
 		"model_year": 2018,
-		"has_ssl": false,
+		"has_ssl": true,
 		"has_ambilight": true,
+                "has_chromecast": true,
 		"hide_input_selector": false,
 		"info_button": "Source",
-		"playpause_button": "Options"
+		"playpause_button": "Options",
+		"wol_url": "wol://18:8e:d5:a2:8c:66"
  	}
  ]
   ```
