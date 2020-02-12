@@ -3,6 +3,7 @@ var Characteristic;
 var request = require("request");
 var pollingtoevent = require('polling-to-event');
 var wol = require('wake_on_lan');
+var exec = require("child_process").exec;
 
 module.exports = function(homebridge) {
 	Service = homebridge.hap.Service;
@@ -31,6 +32,7 @@ function HttpStatusAccessory(log, config, api) {
 	this.has_ambilight = config["has_ambilight"] || false;
 	this.has_ssl = config["has_ssl"] || false;
 	this.has_input_selector = !(config["hide_input_selector"] || false);
+	this.etherwake_exec = config["etherwake_exec"];
 	this.info_button = config["info_button"] || "Source";
 	this.playpause_button = config["playpause_button"] || "Options";
 	this.serial_number = config["serial_number"] || this.wol_urls[0] || "123456789";
@@ -229,12 +231,13 @@ HttpStatusAccessory.prototype = {
 			body: body,
 			method: method,
 			rejectUnauthorized: false,
-			timeout: 1000
+			timeout: 2000
 		};
+
+		options.followAllRedirects = true;
 
 		// EXTRA CONNECTION SETTINGS FOR API V6 (HTTP DIGEST)
 		if (need_authentication) {
-			options.followAllRedirects = true;
 			options.forever = true;
 			options.auth = {
 				user: this.username,
@@ -251,6 +254,7 @@ HttpStatusAccessory.prototype = {
 	},
 
 	wolRequest: function(url, callback) {
+		var that = this;
 		this.log.debug('calling WOL with URL %s', url);
 		if (!url) {
 			callback(url, null, "EMPTY");
@@ -259,15 +263,32 @@ HttpStatusAccessory.prototype = {
 		if (url.substring(0, 3).toLowerCase() == "wol") {
 			//Wake on lan request
 			var macAddress = url.replace(/^wol[:]?[\/]?[\/]?/ig, "");
-			this.log("Excuting WakeOnLan request to " + macAddress);
-			wol.wake(macAddress, function(error) {
-				if (error) {
-					this.log("WakeOnLan failed: %s", error);
-					callback(url, error);
-				} else {
-					callback(url, null, "OK");
-				}
-			});
+
+			var wol_wake = function() {
+				wol.wake(macAddress, function(error) {
+					if (error) {
+						that.log("WakeOnLan failed: %s", error);
+						callback(url, error);
+					} else {
+						callback(url, null, "OK");
+					}
+				});
+			}
+
+			this.log.debug("Executing WakeOnLan request to " + macAddress);
+			if (this.etherwake_exec) {
+				exec(this.etherwake_exec + " '" + macAddress + "'", function(error, stdout, stderr) {
+					if (error) {
+						that.log("Error with " + that.etherwake_exec + ": " + stderr + " " + stdout);
+						wol_wake();
+					} else {
+						that.log.debug(that.etherwake_exec + " success " + stdout);
+						callback(url, null, stdout);
+					}
+			})
+			} else {
+				wol_wake();
+			}
 		} else {
 			if (url.length > 3) {
 				callback(url, new Error("Unsupported protocol: ", "ERROR"));
@@ -329,33 +350,34 @@ HttpStatusAccessory.prototype = {
 					var send_powerstate = function() {
 						that.setPowerStateLoop(8, url, body, powerState, function(error, state_power) {
 							that.state_power = state_power;
+							if (error) {
+								that.log("setPowerStateLoop - ERROR: %s", error);
+							}
 							if (!called_back) {
 								called_back = true;
 								callback(error, that.state_power);
 							}
-							if (error) {
-								that.state_power = false;
-								that.log("setPowerStateLoop - ERROR: %s", error);
-								if (that.tvService) {
-									that.tvService.getCharacteristic(Characteristic.Active).setValue(that.state_power, null, "statuspoll");
-								}
+							if (that.tvService) {
+								that.tvService.getCharacteristic(Characteristic.Active).setValue(that.state_power, null, "statuspoll");
 							}
 						});
 					};
-					if (send_chromecast) {
-						sent_chromecast = false;
-						that.httpRequest(this.chromecast_url, "{}\r\n", "POST", false, function(error, response, responseBody) {
+					setTimeout(function() {
+						if (send_chromecast) {
+							send_chromecast = false;
+							that.log.debug("Sending ChromeCast: %s", this.chromecast_url);
+							that.httpRequest(this.chromecast_url, null, "POST", false, function(error, response, responseBody) {
+								that.log.debug("ChromeCast sent: %s: %s %s", response, error, responseBody);
+								if (!that.state_power) {
+									send_powerstate();
+								}
+							});
+						} else {
 							if (!that.state_power) {
 								send_powerstate();
 							}
-						});
-					} else {
-						setTimeout(function() {
-							if (!that.state_power) {
-								send_powerstate();
-							}
-						}, 500);
-					}
+						}
+					}, 500);
 				}.bind(this));
 			} 
 		} else {
